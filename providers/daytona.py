@@ -239,6 +239,10 @@ async def execute(
                 # Add a small delay to avoid API rate limiting
                 await asyncio.sleep(API_WAIT_TIME)
                 
+            if hasattr(setup_response, 'exit_code') and setup_response.exit_code != 0:
+                log_error(f"Setup failed with exit code {setup_response.exit_code}: {setup_response.result}")
+                raise RuntimeError(f"Workspace setup failed: {setup_response.result}")
+                
             setup_time = time.time() - setup_start
             metrics.add_metric("Setup Time", setup_time)
         
@@ -529,5 +533,11 @@ async def prepare_setup_code(
         setup_code.append("\n# Configure matplotlib")
         setup_code.append("import matplotlib")
         setup_code.append("matplotlib.use('Agg')  # Use non-interactive backend")
+        
+    # Add custom setup script if provided
+    if test_config.get('setup_script'):
+        log_info("Adding custom setup script from test config")
+        setup_code.append("\n# Custom test setup script")
+        setup_code.append(test_config['setup_script'])
     
     return "\n".join(setup_code)

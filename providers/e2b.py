@@ -86,6 +86,15 @@ pip install --user numpy scipy
 """
             sandbox.run_code(pip_install)
             
+        # Run custom setup script if provided in test config
+        if test_config.get('setup_script'):
+            log_info("Running custom setup script from test config...")
+            setup_exec = sandbox.run_code(test_config['setup_script'])
+            if setup_exec.error:
+                log_error(f"Custom setup script error: {setup_exec.error}")
+                raise RuntimeError(f"Custom setup script failed: {setup_exec.error}")
+            log_info(f"Custom setup script stdout: {setup_exec.logs.stdout}")
+            
         # Record setup time (convert to milliseconds)
         setup_time = (time.time() - setup_start) * 1000  
         log_info(f"Actual measured setup time: {setup_time}ms")

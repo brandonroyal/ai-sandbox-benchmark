@@ -19,7 +19,10 @@ def log_warning(message):
     logger.warning(f"[Modal] {message}")
 
 # Define the image with necessary packages at global scope
-image = modal.Image.debian_slim().pip_install(
+image = modal.Image.debian_slim().apt_install(
+    "git",
+    "python3-venv"
+).pip_install(
     "numpy", 
     "pandas", 
     "scipy",  # Required for FFT tests
@@ -226,6 +229,27 @@ print(f"Installed packages: {{installed_packages}}")
             log_info(f"Package installation output: {pip_stdout}")
             if pip_stderr:
                 log_warning(f"Package installation stderr: {pip_stderr}")
+                
+        # Run custom setup script if provided in test config
+        if test_config.get('setup_script'):
+            log_info("Running custom setup script from test config...")
+            # Write custom setup script to a temp file and execute it
+            setup_script_file = "/sandbox/custom_setup.py"
+            write_setup_cmd = await sandbox.exec.aio(
+                "bash",
+                "-c",
+                f'cat > {setup_script_file} << \'EOL\'\n{test_config["setup_script"]}\nEOL'
+            )
+            await write_setup_cmd.wait.aio()
+            setup_run_cmd = await sandbox.exec.aio("python", setup_script_file)
+            await setup_run_cmd.wait.aio()
+            setup_stdout = await setup_run_cmd.stdout.read.aio()
+            setup_stderr = await setup_run_cmd.stderr.read.aio()
+            log_info(f"Custom setup script stdout: {setup_stdout}")
+            if setup_stderr:
+                log_warning(f"Custom setup script stderr: {setup_stderr}")
+            if setup_run_cmd.returncode != 0:
+                raise RuntimeError(f"Custom setup script failed with exit code {setup_run_cmd.returncode}: {setup_stderr}")
                 
         # Record setup time
         metrics.add_metric("Setup Time", time.time() - setup_start)
