@@ -2,13 +2,22 @@
 
 import time
 import os
+
+# Configure SSL certificates using certifi to prevent verification errors on macOS
+try:
+    import certifi
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+    os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+except ImportError:
+    pass
+
 import asyncio
 import logging
 import json
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any, List, Union, Tuple, Optional
-from daytona_sdk import Daytona, DaytonaConfig, CreateSandboxParams
+from daytona_sdk import Daytona, DaytonaConfig, CreateSandboxFromImageParams
 from metrics import BenchmarkTimingMetrics
 from providers.utils import extract_imports, check_and_install_dependencies
 
@@ -117,7 +126,8 @@ async def list_workspaces(target_region: str) -> List:
             
             # List workspaces using the persistent executor
             # This triggers the warm pool preparation on Daytona's side
-            workspaces = await loop.run_in_executor(daytona_executor, daytona.list)
+            paginated = await loop.run_in_executor(daytona_executor, daytona.list)
+            workspaces = paginated.items if hasattr(paginated, 'items') else paginated
             
             # Add a small delay to avoid API rate limiting
             await asyncio.sleep(API_WAIT_TIME)
@@ -189,7 +199,7 @@ async def execute(
         daytona = await get_or_create_daytona_client(target_region)
         
         # Configure workspace parameters with improved defaults
-        params = CreateSandboxParams(
+        params = CreateSandboxFromImageParams(
             image=image,
             language="python"
         )
@@ -241,6 +251,41 @@ async def execute(
         else:
             log_info("No setup needed, skipping setup step")
         
+        # Check if we should measure lifecycle suspend/resume
+        if test_config.get('measure_lifecycle'):
+            log_info("Measuring Suspend/Resume lifecycle latency...")
+            
+            # Write verification file to the filesystem BEFORE suspend
+            verification_content = "Stateful Sandbox Persistence Test OK"
+            write_file_code = f"""
+with open('/tmp/suspend_resume_verify.txt', 'w') as f:
+    f.write('{verification_content}')
+print("Verification file written")
+"""
+            log_info("Writing filesystem verification file...")
+            async with api_semaphore:
+                log_debug("Acquired API semaphore for writing verification file")
+                await loop.run_in_executor(daytona_executor, workspace.process.code_run, write_file_code)
+                await asyncio.sleep(API_WAIT_TIME)
+
+            # Measure Suspend
+            suspend_start = time.time()
+            async with api_semaphore:
+                log_debug("Acquired API semaphore for workspace suspend (stop)")
+                await loop.run_in_executor(daytona_executor, daytona.stop, workspace)
+                await asyncio.sleep(API_WAIT_TIME)
+            metrics.add_metric("Suspend", time.time() - suspend_start)
+            log_info("Workspace suspended")
+            
+            # Measure Resume
+            resume_start = time.time()
+            async with api_semaphore:
+                log_debug("Acquired API semaphore for workspace resume (start)")
+                await loop.run_in_executor(daytona_executor, daytona.start, workspace)
+                await asyncio.sleep(API_WAIT_TIME)
+            metrics.add_metric("Resume", time.time() - resume_start)
+            log_info("Workspace resumed")
+
         # Execute the actual code with the same persistent executor
         log_info("Executing code...")
         
@@ -294,7 +339,7 @@ async def execute(
                 async with api_semaphore:
                     log_debug("Acquired API semaphore for workspace cleanup")
                     # Use the same persistent executor for cleanup
-                    await loop.run_in_executor(daytona_executor, daytona.remove, workspace)
+                    await loop.run_in_executor(daytona_executor, daytona.delete, workspace)
                     # No need for a delay after cleanup as it's typically the last operation
                     
                 log_info("Cleanup completed")

@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 import asyncio
 import os
+import sys
+
+# Configure SSL certificates using certifi to prevent verification errors on macOS
+try:
+    import certifi
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+    os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+except ImportError:
+    pass
 import time
 import logging
 import argparse
@@ -253,12 +262,12 @@ class SandboxExecutor:
 
             if provider == "daytona":
                 # Daytona requires additional parameters: executor and target_region.
-                output, provider_metrics = await provider_executors[provider](code, executor, target_region, env_vars)
+                output, provider_metrics = await provider_executors[provider](test_data, executor, target_region, env_vars)
             elif provider == "local":
                 # Local provider doesn't need to be awaited as it will use subprocess
-                output, provider_metrics = await provider_executors[provider](code, env_vars)
+                output, provider_metrics = await provider_executors[provider](test_data, env_vars)
             else:
-                output, provider_metrics = await provider_executors[provider](code, env_vars)
+                output, provider_metrics = await provider_executors[provider](test_data, env_vars)
 
             # Ensure the provider metrics are properly handled
             if hasattr(provider_metrics, 'metrics'):
@@ -764,7 +773,7 @@ class ResultsVisualizer:
                 headers = ["Metric"] + [p.capitalize() for p in providers]
                 table_data = []
 
-                for metric in ["Workspace Creation", "Code Execution", "Cleanup"]:
+                for metric in ["Workspace Creation", "Suspend", "Resume", "Code Execution", "Cleanup"]:
                     row = [metric]
                     for provider in providers:
                         all_runs_metrics = []
@@ -838,6 +847,24 @@ class ResultsVisualizer:
 
 
 async def main(args):
+    # Load configuration
+    config = {}
+    config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f) or {}
+    except Exception:
+        pass
+
+    # Resolve defaults from config.yml or fallbacks
+    if args.runs is None:
+        args.runs = config.get('tests', {}).get('measurement_runs', 10)
+    if args.warmup_runs is None:
+        args.warmup_runs = config.get('tests', {}).get('warmup_runs', 1)
+    if args.target_region is None:
+        args.target_region = config.get('providers', {}).get('daytona', {}).get('default_region', 'eu')
+
     # Set num_concurrent_providers to match the number of providers being tested
     # This ensures we efficiently use resources for parallel provider execution
     providers_to_run = args.providers.split(',') if args.providers else []
@@ -937,11 +964,11 @@ if __name__ == "__main__":
                         help='Comma-separated list of providers to test. Default: daytona,e2b,codesandbox,modal,local')
     parser.add_argument('-A', '--all-providers', action='store_true',
                         help='Toggle between selecting all providers and no providers')
-    parser.add_argument('--runs', '-r', type=int, default=10,
+    parser.add_argument('--runs', '-r', type=int, default=None,
                         help='Number of measurement runs per test/provider. Default: 10')
-    parser.add_argument('--warmup-runs', '-w', type=int, default=1,
+    parser.add_argument('--warmup-runs', '-w', type=int, default=None,
                         help='Number of warmup runs. Default: 1')
-    parser.add_argument('--target-region', type=str, default='eu',
+    parser.add_argument('--target-region', type=str, default=None,
                         help='Target region (eu, us, asia). Default: eu')
     parser.add_argument('--show-history', action='store_true',
                         help='Show historical comparison after benchmark')

@@ -1,7 +1,15 @@
 import asyncio
-from daytona_sdk import Daytona, CreateWorkspaceParams, DaytonaConfig
-from typing import List
 import os
+
+# Configure SSL certificates using certifi to prevent verification errors on macOS
+try:
+    import certifi
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+    os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+except ImportError:
+    pass
+
+from daytona_sdk import Daytona, CreateSandboxFromImageParams, DaytonaConfig
 from concurrent.futures import ThreadPoolExecutor
 import time
 
@@ -17,7 +25,8 @@ async def run_workspace_flow(executor: ThreadPoolExecutor) -> None:
     start_time = time.time()
     workspace_id = None
 
-    params = CreateWorkspaceParams(
+    params = CreateSandboxFromImageParams(
+        image="daytonaio/ai-test:0.2.3",
         language="python"
     )
 
@@ -66,7 +75,7 @@ async def run_workspace_flow(executor: ThreadPoolExecutor) -> None:
             cleanup_start = time.time()
             await loop.run_in_executor(
                 executor,
-                daytona.remove,
+                daytona.delete,
                 workspace
             )
             cleanup_duration = time.time() - cleanup_start

@@ -49,6 +49,8 @@ class EnhancedTimingMetrics:
         # Standard metrics that should be included in total time
         standard_keys = [
             "Workspace Creation",
+            "Suspend",
+            "Resume",
             "Dependency Installation",
             "Environment Setup",
             "Code Execution",

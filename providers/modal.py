@@ -62,7 +62,7 @@ async def execute(code: str, env_vars: Dict[str, str] = None):
                 code = str(code)  # Force to string to avoid further errors
 
         # Look up or create an app as required by Modal
-        app = modal.App.lookup(
+        app = await modal.App.lookup.aio(
             "sandbox-execution",
             create_if_missing=True
         )
@@ -77,10 +77,11 @@ async def execute(code: str, env_vars: Dict[str, str] = None):
         # Create a sandbox with the app and image
         log_info("Creating Modal sandbox...")
         start = time.time()
-        sandbox = modal.Sandbox.create(
+        sandbox = await modal.Sandbox.create.aio(
             app=app,
             image=image,
-            secrets=secrets  # This will be an empty list if no env vars
+            secrets=secrets,  # This will be an empty list if no env vars
+            _experimental_enable_snapshot=test_config.get('measure_lifecycle', False)
         )
         # Track only the actual sandbox creation time
         metrics.add_metric("Workspace Creation", time.time() - start)
@@ -89,16 +90,16 @@ async def execute(code: str, env_vars: Dict[str, str] = None):
         log_info("Writing code to sandbox...")
 
         # Create directory and write the code file directly in the sandbox
-        mkdir_cmd = sandbox.exec("mkdir", "-p", "/sandbox")
-        mkdir_cmd.wait()
+        mkdir_cmd = await sandbox.exec.aio("mkdir", "-p", "/sandbox")
+        await mkdir_cmd.wait.aio()
 
         # Write the Python code to a file in the sandbox
-        write_cmd = sandbox.exec(
+        write_cmd = await sandbox.exec.aio(
             "bash",
             "-c",
             f'cat > /sandbox/code.py << \'EOL\'\n{code}\nEOL'
         )
-        write_cmd.wait()
+        await write_cmd.wait.aio()
 
         # Initialize dependency utilities
         setup_start = time.time()
@@ -198,17 +199,17 @@ print(f"Installed packages: {{installed_packages}}")
         
         # Create the dependency check file
         dependency_check_file = "/sandbox/check_deps.py"
-        write_deps_cmd = sandbox.exec(
+        write_deps_cmd = await sandbox.exec.aio(
             "bash",
             "-c",
             f'cat > {dependency_check_file} << \'EOL\'\n{dependency_check_code}\nEOL'
         )
-        write_deps_cmd.wait()
+        await write_deps_cmd.wait.aio()
         
         # Run the dependency check
-        deps_process = sandbox.exec("python", dependency_check_file)
-        deps_stdout = deps_process.stdout.read()
-        deps_stderr = deps_process.stderr.read()
+        deps_process = await sandbox.exec.aio("python", dependency_check_file)
+        deps_stdout = await deps_process.stdout.read.aio()
+        deps_stderr = await deps_process.stderr.read.aio()
         log_info(f"Dependency check output: {deps_stdout}")
         if deps_stderr:
             log_warning(f"Dependency check stderr: {deps_stderr}")
@@ -216,27 +217,58 @@ print(f"Installed packages: {{installed_packages}}")
         # For FFT performance test, ensure packages are properly installed
         if "from scipy import fft" in code:
             log_info("FFT test detected, installing packages directly...")
-            pip_install_cmd = sandbox.exec(
+            pip_install_cmd = await sandbox.exec.aio(
                 "pip", "install", "--user", "numpy", "scipy"
             )
             # Wait for the installation to complete
-            pip_stdout = pip_install_cmd.stdout.read()
-            pip_stderr = pip_install_cmd.stderr.read()
+            pip_stdout = await pip_install_cmd.stdout.read.aio()
+            pip_stderr = await pip_install_cmd.stderr.read.aio()
             log_info(f"Package installation output: {pip_stdout}")
             if pip_stderr:
                 log_warning(f"Package installation stderr: {pip_stderr}")
                 
         # Record setup time
         metrics.add_metric("Setup Time", time.time() - setup_start)
+
+        # Check if we should measure lifecycle suspend/resume
+        if test_config.get('measure_lifecycle'):
+            log_info("Measuring Suspend/Resume lifecycle latency...")
+            
+            # Write verification file to the filesystem BEFORE suspend
+            verification_content = "Stateful Sandbox Persistence Test OK"
+            write_file_code = f"""
+with open('/tmp/suspend_resume_verify.txt', 'w') as f:
+    f.write('{verification_content}')
+print("Verification file written")
+"""
+            log_info("Writing filesystem verification file...")
+            write_cmd = await sandbox.exec.aio("python", "-c", write_file_code)
+            await write_cmd.wait.aio()
+
+            # Measure Suspend
+            suspend_start = time.time()
+            snapshot = await sandbox._experimental_snapshot.aio()
+            await sandbox.terminate.aio()
+            metrics.add_metric("Suspend", time.time() - suspend_start)
+            log_info("Workspace suspended and terminated")
+            
+            # Measure Resume
+            resume_start = time.time()
+            sandbox = await modal.Sandbox._experimental_from_snapshot.aio(
+                snapshot=snapshot,
+                client=sandbox._client
+            )
+            metrics.add_metric("Resume", time.time() - resume_start)
+            log_info("Workspace resumed from snapshot")
             
         # Execute the code
         log_info("Running code in sandbox...")
         start_exec = time.time()
-        process = sandbox.exec("python", "/sandbox/code.py")
+        process = await sandbox.exec.aio("python", "/sandbox/code.py")
 
         # Collect output
-        stdout_data = process.stdout.read()
-        stderr_data = process.stderr.read()
+        stdout_data = await process.stdout.read.aio()
+        stderr_data = await process.stderr.read.aio()
 
         # Record execution time
         metrics.add_metric("Code Execution", time.time() - start_exec)
@@ -267,7 +299,7 @@ print(f"Installed packages: {{installed_packages}}")
         if sandbox:
             start_cleanup = time.time()
             try:
-                sandbox.terminate()
+                await sandbox.terminate.aio()
                 cleanup_time = time.time() - start_cleanup
                 metrics.add_metric("Cleanup", cleanup_time)
                 log_info(f"Cleanup completed in {cleanup_time:.2f}s")

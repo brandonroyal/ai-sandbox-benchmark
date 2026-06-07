@@ -24,7 +24,7 @@ tests:
 # Provider configuration
 providers:
   daytona:
-    default_region: eu
+    default_region: us
   e2b:
     # E2B specific configuration
   codesandbox:

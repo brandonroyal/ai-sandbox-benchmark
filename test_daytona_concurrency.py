@@ -11,11 +11,20 @@ Usage:
 
 import os
 import time
+
+# Configure SSL certificates using certifi to prevent verification errors on macOS
+try:
+    import certifi
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+    os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+except ImportError:
+    pass
+
 import asyncio
 import statistics
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
-from daytona_sdk import Daytona, DaytonaConfig, CreateSandboxParams
+from daytona_sdk import Daytona, DaytonaConfig, CreateSandboxFromImageParams
 
 # Load environment variables
 load_dotenv()
@@ -68,7 +77,7 @@ async def create_workspace(client, executor, index):
     print(f"Creating workspace {index+1}/{NUM_WORKSPACES}...")
     start_time = time.time()
 
-    params = CreateSandboxParams(
+    params = CreateSandboxFromImageParams(
         image=IMAGE,
         language="python"
     )
@@ -82,7 +91,7 @@ async def create_workspace(client, executor, index):
         print(f"  Workspace {index+1} created in {creation_time:.2f}s: {workspace_id}")
 
         # Clean up
-        await loop.run_in_executor(executor, client.remove, workspace)
+        await loop.run_in_executor(executor, client.delete, workspace)
         print(f"  Workspace {index+1} removed")
 
         return creation_time
@@ -98,7 +107,8 @@ async def list_workspaces(client, executor):
     try:
         # List workspaces
         loop = asyncio.get_running_loop()
-        workspaces = await loop.run_in_executor(executor, client.list)
+        paginated = await loop.run_in_executor(executor, client.list)
+        workspaces = paginated.items if hasattr(paginated, 'items') else paginated
         list_time = time.time() - start_time
         print(f"  Listed {len(workspaces)} workspaces in {list_time:.2f}s")
 

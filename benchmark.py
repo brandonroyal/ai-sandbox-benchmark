@@ -7,6 +7,15 @@ user-friendly way to select and run benchmarks across different sandbox provider
 """
 import os
 import sys
+
+# Configure SSL certificates using certifi to prevent verification errors on macOS
+try:
+    import certifi
+    os.environ["SSL_CERT_FILE"] = certifi.where()
+    os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
+except ImportError:
+    pass
+
 import argparse
 import asyncio
 import curses
@@ -107,10 +116,21 @@ class BenchmarkTUI:
         # Use dark text on light background for better contrast (WCAG compliant)
         curses.init_pair(5, curses.COLOR_BLACK, curses.COLOR_WHITE)  # Status bar - high contrast
 
+        # Load configuration from config.yml if available
+        config = {}
+        config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
+        try:
+            if os.path.exists(config_path):
+                import yaml
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f) or {}
+        except Exception:
+            pass
+
         # Default configuration
-        self.runs = 1
-        self.warmup_runs = 0
-        self.region = "eu"
+        self.runs = config.get('tests', {}).get('measurement_runs', 1)
+        self.warmup_runs = config.get('tests', {}).get('warmup_runs', 0)
+        self.region = config.get('providers', {}).get('daytona', {}).get('default_region', 'eu')
 
         # Available providers and tests
         self.providers = ["daytona", "e2b", "codesandbox", "modal", "local"]
@@ -862,7 +882,7 @@ class BenchmarkTUI:
             #     self.results_content.append(("", curses.A_NORMAL))
 
             # Process performance data
-            metrics = ["Workspace Creation", "Code Execution", "Cleanup", "Total Time"]
+            metrics = ["Workspace Creation", "Suspend", "Resume", "Code Execution", "Cleanup", "Total Time"]
             self.results_content.append(("Performance Metrics (ms):", curses.A_BOLD))
 
             # Headers
@@ -1102,6 +1122,28 @@ if __name__ == "__main__":
         args.target_region != 'eu'
     ]):
         # Run in CLI mode with the provided arguments
+        import yaml
+        config = {}
+        config_path = os.path.join(os.path.dirname(__file__), 'config.yml')
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    config = yaml.safe_load(f) or {}
+            except Exception:
+                pass
+
+        # Check if user explicitly provided these flags on CLI
+        has_runs_cli = '-r' in sys.argv or '--runs' in sys.argv
+        has_warmup_cli = '-w' in sys.argv or '--warmup-runs' in sys.argv
+        has_region_cli = '--target-region' in sys.argv
+
+        if not has_runs_cli:
+            args.runs = config.get('tests', {}).get('measurement_runs', args.runs)
+        if not has_warmup_cli:
+            args.warmup_runs = config.get('tests', {}).get('warmup_runs', args.warmup_runs)
+        if not has_region_cli:
+            args.target_region = config.get('providers', {}).get('daytona', {}).get('default_region', args.target_region)
+
         test_ids = []
         if args.tests == "all":
             test_ids = list(defined_tests.keys())

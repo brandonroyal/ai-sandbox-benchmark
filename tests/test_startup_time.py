@@ -22,7 +22,7 @@ def test_startup_time():
     # Define test configuration
     config = create_test_config(
         env_vars=[],  # No env vars needed
-        single_run=True,  # Only run once per benchmark session
+        single_run=False,  # Only run once per benchmark session
         is_info_test=True  # This is more of an informational test
     )
     

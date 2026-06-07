@@ -22,7 +22,7 @@ async def execute(code: str, env_vars: Dict[str, str] = None):
     metrics = BenchmarkTimingMetrics()
     try:
         start = time.time()
-        sandbox = Sandbox()
+        sandbox = Sandbox.create()
         metrics.add_metric("Workspace Creation", time.time() - start)
 
         # Extract test configuration if available
@@ -94,6 +94,33 @@ pip install --user numpy scipy
         metrics.ms_metrics.add("Setup Time")
         metrics.add_metric("Setup Time", setup_time)
             
+        # Check if we should measure lifecycle suspend/resume
+        if test_config.get('measure_lifecycle'):
+            log_info("Measuring Suspend/Resume lifecycle latency...")
+            
+            # Write verification file to the filesystem BEFORE suspend
+            verification_content = "Stateful Sandbox Persistence Test OK"
+            write_file_code = f"""
+with open('/tmp/suspend_resume_verify.txt', 'w') as f:
+    f.write('{verification_content}')
+print("Verification file written")
+"""
+            log_info("Writing filesystem verification file...")
+            sandbox.run_code(write_file_code)
+
+            # Measure Suspend
+            suspend_start = time.time()
+            sandbox.pause()
+            metrics.add_metric("Suspend", time.time() - suspend_start)
+            log_info("Workspace suspended")
+            
+            # Measure Resume
+            resume_start = time.time()
+            sandbox_id = sandbox.sandbox_id
+            sandbox = Sandbox.connect(sandbox_id)
+            metrics.add_metric("Resume", time.time() - resume_start)
+            log_info("Workspace resumed")
+
         # Run the code
         start = time.time()
         execution = sandbox.run_code(code)
